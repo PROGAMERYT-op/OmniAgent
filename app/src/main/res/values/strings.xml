@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">OmniAgent AI</string>
+    <string name="accessibility_service_label">OmniAgent Accessibility Service</string>
+    <string name="accessibility_service_description">Enables OmniAgent AI to inspect screen hierarchy, execute UI gestures, automate routines, and assist user navigation.</string>
+</resources>

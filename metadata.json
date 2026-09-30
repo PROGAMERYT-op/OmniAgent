@@ -1,0 +1,6 @@
+{
+  "name": "OmniAgent AI",
+  "description": "Autonomous Floating AI Assistant overlay with Gemini multimodal reasoning, accessibility automation, and safety guardrails.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
