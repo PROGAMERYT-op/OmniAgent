@@ -171,6 +171,6 @@ See the [LICENSE](LICENSE) file for the full license text.
 ---
 
 <div align="center">
-  <strong>Built with ❤️ by ProDev India</strong><br/>
+  <strong>Built with ❤️ by ProDev</strong><br/>
   <sub>Package: <code>com.prodev.omniagent</code></sub>
 </div>
