@@ -9,7 +9,7 @@
 [![Android](https://img.shields.io/badge/Platform-Android-green?logo=android)](https://developer.android.com)
 [![Kotlin](https://img.shields.io/badge/Language-Kotlin-purple?logo=kotlin)](https://kotlinlang.org)
 [![Gemini](https://img.shields.io/badge/AI-Gemini-blue?logo=google)](https://ai.google.dev)
-[![License](https://img.shields.io/badge/License-Apache%202.0-orange)](LICENSE)
+[![License](https://img.shields.io/badge/License-AGPL%20v3-red)](LICENSE)
 [![Package](https://img.shields.io/badge/Package-com.prodev.omniagent-blue)](app/build.gradle.kts)
 
 </div>
@@ -162,15 +162,11 @@ OmniAgent/
 
 ## 📄 License
 
-```
-Copyright 2026 ProDev
+This project is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**.
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
+See the [LICENSE](LICENSE) file for the full license text.
 
-    http://www.apache.org/licenses/LICENSE-2.0
-```
+> This means any modifications or network-deployed versions of this software must also be open-sourced under the same license.
 
 ---
 
