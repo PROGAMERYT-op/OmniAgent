@@ -1,4 +1,6 @@
 import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
+import java.io.FileInputStream
+import java.util.Properties
 
 plugins {
   alias(libs.plugins.android.application)
@@ -9,11 +11,11 @@ plugins {
 }
 
 android {
-  namespace = "com.example"
+  namespace = "com.prodev.omniagent"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
   defaultConfig {
-    applicationId = "com.example"
+    applicationId = "com.prodev.omniagent"
     minSdk = 24
     targetSdk = 36
     versionCode = 1
@@ -24,11 +26,18 @@ android {
 
   signingConfigs {
     create("release") {
-      val keystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
-      storeFile = file(keystorePath)
-      storePassword = System.getenv("STORE_PASSWORD")
-      keyAlias = "upload"
-      keyPassword = System.getenv("KEY_PASSWORD")
+      val keystorePropsFile = rootProject.file("keystore.properties")
+      val keystoreProperties = Properties()
+      if (keystorePropsFile.exists()) {
+        keystoreProperties.load(FileInputStream(keystorePropsFile))
+      }
+      val storeFilePath = keystoreProperties.getProperty("storeFile")
+        ?: System.getenv("KEYSTORE_PATH")
+        ?: "${rootDir}/release.keystore"
+      storeFile = file(storeFilePath)
+      storePassword = keystoreProperties.getProperty("storePassword") ?: System.getenv("STORE_PASSWORD")
+      keyAlias = keystoreProperties.getProperty("keyAlias") ?: System.getenv("KEY_ALIAS") ?: "omniagent"
+      keyPassword = keystoreProperties.getProperty("keyPassword") ?: System.getenv("KEY_PASSWORD") ?: storePassword
     }
     create("debugConfig") {
       storeFile = file("${rootDir}/debug.keystore")
