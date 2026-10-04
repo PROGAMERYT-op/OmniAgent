@@ -2,9 +2,12 @@ package com.prodev.omniagent.service
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
+import android.content.ComponentName
+import android.content.Context
 import android.graphics.Path
 import android.graphics.Rect
 import android.os.Bundle
+import android.provider.Settings
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -30,6 +33,30 @@ class AgentAccessibilityService : AccessibilityService() {
         fun getInstance(): AgentAccessibilityService? = instance
 
         fun isServiceRunning(): Boolean = instance != null && _isConnected.value
+
+        /**
+         * Cross-checks the Android OS accessibility service registry to determine if
+         * this service is actually enabled at the system level. This prevents the ghost
+         * "Active" state that occurs when the app crashes without calling onDestroy(),
+         * leaving the in-process [instance] reference stale.
+         *
+         * Use this together with [isServiceRunning] for a reliable dual-gate check.
+         */
+        fun isEnabledInSystem(context: Context): Boolean {
+            return try {
+                val enabledServices = Settings.Secure.getString(
+                    context.contentResolver,
+                    Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+                ) ?: return false
+                val targetComponent = ComponentName(context, AgentAccessibilityService::class.java)
+                enabledServices.split(":").any { entry ->
+                    ComponentName.unflattenFromString(entry.trim()) == targetComponent
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to read accessibility service system state: ${e.message}")
+                false
+            }
+        }
     }
 
     override fun onServiceConnected() {

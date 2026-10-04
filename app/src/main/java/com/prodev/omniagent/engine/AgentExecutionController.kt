@@ -10,15 +10,16 @@ import android.os.VibratorManager
 import android.util.Log
 import com.prodev.omniagent.ai.AgentAction
 import com.prodev.omniagent.ai.GeminiAgentRepository
+import com.prodev.omniagent.ai.OpenRouterRepository
 import com.prodev.omniagent.data.db.ActionLogEntity
 import com.prodev.omniagent.data.db.AppDatabase
 import com.prodev.omniagent.data.prefs.AgentPreferences
 import com.prodev.omniagent.service.AgentAccessibilityService
 import com.prodev.omniagent.service.FloatingOverlayService
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -58,7 +59,8 @@ sealed class AgentExecutionState {
 
 class AgentExecutionController(
     private val context: Context,
-    private val repository: GeminiAgentRepository,
+    private val geminiRepository: GeminiAgentRepository,
+    private val openRouterRepository: OpenRouterRepository,
     private val preferences: AgentPreferences,
     private val screenCaptureManager: ScreenCaptureManager
 ) {
@@ -71,17 +73,19 @@ class AgentExecutionController(
 
         fun getInstance(context: Context): AgentExecutionController {
             return INSTANCE ?: synchronized(this) {
-                val prefs = AgentPreferences(context)
-                val repo = GeminiAgentRepository()
+                val prefs = AgentPreferences.getInstance(context)
+                val geminiRepo = GeminiAgentRepository()
+                val openRouterRepo = OpenRouterRepository()
                 val capture = ScreenCaptureManager(context)
-                val inst = AgentExecutionController(context, repo, prefs, capture)
+                val inst = AgentExecutionController(context, geminiRepo, openRouterRepo, prefs, capture)
                 INSTANCE = inst
                 inst
             }
         }
     }
 
-    private val scope = CoroutineScope(Dispatchers.Main + Job())
+
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var currentExecutionJob: Job? = null
 
     private val _state = MutableStateFlow<AgentExecutionState>(AgentExecutionState.Idle)
@@ -128,10 +132,17 @@ class AgentExecutionController(
     }
 
     private suspend fun runAgentLoop(userGoal: String) {
-        val apiKey = preferences.getEffectiveApiKey()
+        val provider = preferences.selectedProvider.value
+        val apiKey = if (provider == "openrouter") {
+            preferences.getEffectiveOpenRouterKey()
+        } else {
+            preferences.getEffectiveApiKey()
+        }
+
         if (apiKey.isBlank()) {
-            _state.value = AgentExecutionState.Failed("API Key is missing. Please configure your Gemini API Key in Settings.")
-            addMessage("system", "⚠️ Gemini API Key is missing. Please enter your key in Settings.")
+            val providerName = if (provider == "openrouter") "OpenRouter" else "Gemini"
+            _state.value = AgentExecutionState.Failed("$providerName API Key is missing. Please configure it in Settings.")
+            addMessage("system", "⚠️ $providerName API Key is missing. Please enter your key in Settings.")
             return
         }
 
@@ -171,17 +182,33 @@ class AgentExecutionController(
                     }
                 }
 
-                // Step 3: Ask Gemini
+                // Step 3: Ask AI (route to correct provider)
                 _state.value = AgentExecutionState.Thinking(step, "Evaluating next UI action...")
 
-                val geminiResult = repository.getNextAgentAction(
-                    apiKey = apiKey,
-                    model = model,
-                    userGoal = userGoal,
-                    screenHierarchyText = hierarchyText,
-                    screenBitmap = screenshotBitmap,
-                    actionHistory = actionHistory
-                )
+                val geminiResult = when (preferences.selectedProvider.value) {
+                    "openrouter" -> {
+                        val orKey = preferences.getEffectiveOpenRouterKey()
+                        val orModel = preferences.openRouterModel.value
+                        openRouterRepository.getNextAgentAction(
+                            apiKey = orKey,
+                            model = orModel,
+                            userGoal = userGoal,
+                            screenHierarchyText = hierarchyText,
+                            screenBitmap = screenshotBitmap,
+                            actionHistory = actionHistory
+                        )
+                    }
+                    else -> {
+                        geminiRepository.getNextAgentAction(
+                            apiKey = apiKey,
+                            model = model,
+                            userGoal = userGoal,
+                            screenHierarchyText = hierarchyText,
+                            screenBitmap = screenshotBitmap,
+                            actionHistory = actionHistory
+                        )
+                    }
+                }
 
                 if (geminiResult.isFailure) {
                     val err = geminiResult.exceptionOrNull()?.message ?: "Unknown AI reasoning error"

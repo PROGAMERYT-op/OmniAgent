@@ -8,7 +8,9 @@ import android.os.PowerManager
 import android.provider.Settings
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.prodev.omniagent.ai.AvailableModel
 import com.prodev.omniagent.ai.GeminiAgentRepository
+import com.prodev.omniagent.ai.OpenRouterRepository
 import com.prodev.omniagent.data.db.ActionLogEntity
 import com.prodev.omniagent.data.db.AppDatabase
 import com.prodev.omniagent.data.db.RoutineEntity
@@ -45,10 +47,11 @@ sealed class ConnectionTestState {
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val context: Context get() = getApplication()
-    val preferences = AgentPreferences(context)
+    val preferences = AgentPreferences.getInstance(context)
     val database = AppDatabase.getDatabase(context)
     val agentController = AgentExecutionController.getInstance(context)
-    private val repository = GeminiAgentRepository()
+    private val geminiRepository = GeminiAgentRepository()
+    private val openRouterRepository = OpenRouterRepository()
 
     val routines: StateFlow<List<RoutineEntity>> = database.routineDao().getAllRoutines()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -65,6 +68,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _quickTestOutput = MutableStateFlow<String?>(null)
     val quickTestOutput: StateFlow<String?> = _quickTestOutput.asStateFlow()
 
+    // ── Live model lists ──────────────────────────────────────────────────────
+
+    private val _geminiModels = MutableStateFlow<List<AvailableModel>>(GeminiAgentRepository.FALLBACK_GEMINI_MODELS)
+    val geminiModels: StateFlow<List<AvailableModel>> = _geminiModels.asStateFlow()
+
+    private val _openRouterModels = MutableStateFlow<List<AvailableModel>>(OpenRouterRepository.FALLBACK_OPENROUTER_MODELS)
+    val openRouterModels: StateFlow<List<AvailableModel>> = _openRouterModels.asStateFlow()
+
+    private val _geminiModelsLoading = MutableStateFlow(false)
+    val geminiModelsLoading: StateFlow<Boolean> = _geminiModelsLoading.asStateFlow()
+
+    private val _openRouterModelsLoading = MutableStateFlow(false)
+    val openRouterModelsLoading: StateFlow<Boolean> = _openRouterModelsLoading.asStateFlow()
+
+    init {
+        // Eagerly fetch available models so the picker is ready when user opens Settings
+        fetchGeminiModels()
+        fetchOpenRouterModels()
+    }
+
+    // ── Permissions ───────────────────────────────────────────────────────────
+
     fun refreshPermissions() {
         _permissions.value = checkPermissions()
     }
@@ -74,7 +99,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             Settings.canDrawOverlays(context)
         } else true
 
-        val hasAccessibility = AgentAccessibilityService.isServiceRunning()
+        // Dual-gate accessibility check: OS registry AND live in-process instance.
+        // This prevents the ghost "Active" state when the app crashes without onDestroy().
+        val isSystemEnabled = AgentAccessibilityService.isEnabledInSystem(context)
+        val isConnected = AgentAccessibilityService.isServiceRunning()
+        // True dual-gate: the service must be registered in the OS AND have a live, bound
+        // in-process instance. This prevents both false negatives (enabled but not yet bound)
+        // and the ghost "Active" state reported when the in-process reference is stale.
+        val hasAccessibility = isSystemEnabled && isConnected
+
         val hasScreenCapture = ScreenCaptureManager.hasProjectionPermission()
 
         val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
@@ -96,13 +129,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
+    // ── Connection tests ──────────────────────────────────────────────────────
+
     fun testGeminiConnection() {
         val apiKey = preferences.getEffectiveApiKey()
         val model = preferences.selectedModel.value
 
         viewModelScope.launch {
             _connectionTestState.value = ConnectionTestState.Testing
-            val result = repository.testConnection(apiKey, model)
+            val result = geminiRepository.testConnection(apiKey, model)
             if (result.isSuccess) {
                 _connectionTestState.value = ConnectionTestState.Success("Model connected: ${result.getOrNull()}")
             } else {
@@ -110,6 +145,52 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
+
+    fun testOpenRouterConnection() {
+        val apiKey = preferences.getEffectiveOpenRouterKey()
+        val model = preferences.openRouterModel.value
+
+        viewModelScope.launch {
+            _connectionTestState.value = ConnectionTestState.Testing
+            val result = openRouterRepository.testConnection(apiKey, model)
+            if (result.isSuccess) {
+                _connectionTestState.value = ConnectionTestState.Success("OpenRouter connected: ${result.getOrNull()}")
+            } else {
+                _connectionTestState.value = ConnectionTestState.Error(result.exceptionOrNull()?.message ?: "Failed")
+            }
+        }
+    }
+
+    fun resetConnectionTestState() {
+        _connectionTestState.value = ConnectionTestState.Idle
+    }
+
+    // ── Model fetching ────────────────────────────────────────────────────────
+
+    fun fetchGeminiModels() {
+        viewModelScope.launch {
+            _geminiModelsLoading.value = true
+            val apiKey = preferences.getEffectiveApiKey()
+            val result = geminiRepository.fetchGeminiModels(apiKey)
+            result.onSuccess { models ->
+                if (models.isNotEmpty()) _geminiModels.value = models
+            }
+            _geminiModelsLoading.value = false
+        }
+    }
+
+    fun fetchOpenRouterModels() {
+        viewModelScope.launch {
+            _openRouterModelsLoading.value = true
+            val result = openRouterRepository.fetchModels()
+            result.onSuccess { models ->
+                if (models.isNotEmpty()) _openRouterModels.value = models
+            }
+            _openRouterModelsLoading.value = false
+        }
+    }
+
+    // ── Agent service ─────────────────────────────────────────────────────────
 
     fun toggleAgentService() {
         if (FloatingOverlayService.isServiceActive.value) {
@@ -148,6 +229,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // ── Diagnostics ───────────────────────────────────────────────────────────
+
     fun runHierarchyDiagnostic() {
         val accessibility = AgentAccessibilityService.getInstance()
         if (accessibility == null) {
@@ -163,6 +246,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun clearDiagnosticOutput() {
         _quickTestOutput.value = null
     }
+
+    // ── Settings navigation helpers ───────────────────────────────────────────
 
     fun openAccessibilitySettings() {
         val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {

@@ -7,11 +7,28 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-class AgentPreferences(private val context: Context) {
+class AgentPreferences private constructor(context: Context) {
     private val prefs: SharedPreferences =
-        context.getSharedPreferences("omniagent_secure_prefs", Context.MODE_PRIVATE)
+        context.applicationContext.getSharedPreferences("omniagent_secure_prefs", Context.MODE_PRIVATE)
 
     companion object {
+        @Volatile
+        private var INSTANCE: AgentPreferences? = null
+
+        /**
+         * Returns the process-wide singleton [AgentPreferences].
+         *
+         * The UI (Settings screen) and the execution engine MUST share the same instance so
+         * that changes written through one are immediately observed by the other's StateFlows.
+         * Creating separate instances previously caused the engine to read stale provider /
+         * model / toggle values.
+         */
+        fun getInstance(context: Context): AgentPreferences {
+            return INSTANCE ?: synchronized(this) {
+                INSTANCE ?: AgentPreferences(context).also { INSTANCE = it }
+            }
+        }
+
         const val KEY_CUSTOM_API_KEY = "custom_gemini_api_key"
         const val KEY_SELECTED_MODEL = "selected_model"
         const val KEY_SAFETY_GUARDRAILS = "safety_guardrails_enabled"
@@ -19,7 +36,21 @@ class AgentPreferences(private val context: Context) {
         const val KEY_VOICE_MODE = "voice_mode_enabled"
         const val KEY_ONBOARDING_DONE = "onboarding_completed"
 
-        const val DEFAULT_MODEL = "gemini-3.5-flash"
+        // Provider selection
+        const val KEY_PROVIDER = "selected_provider"
+        const val KEY_OPENROUTER_API_KEY = "openrouter_api_key"
+        const val KEY_OPENROUTER_MODEL = "openrouter_selected_model"
+
+        const val DEFAULT_MODEL = "gemini-2.0-flash"
+        const val DEFAULT_PROVIDER = "gemini"
+        const val DEFAULT_OPENROUTER_MODEL = "mistralai/mixtral-8x7b-instruct"
+
+        /**
+         * Placeholder shipped in `.env.example`. It is a syntactically valid key shaped string
+         * but is NOT a real key, so it must be treated as "not configured" rather than being
+         * sent to the API (which would otherwise fail with an opaque 400 error).
+         */
+        const val PLACEHOLDER_API_KEY = "AIzaSy_DEFAULT_PLACEHOLDER_KEY"
     }
 
     private val _customApiKey = MutableStateFlow(prefs.getString(KEY_CUSTOM_API_KEY, "") ?: "")
@@ -40,10 +71,24 @@ class AgentPreferences(private val context: Context) {
     private val _onboardingCompleted = MutableStateFlow(prefs.getBoolean(KEY_ONBOARDING_DONE, false))
     val onboardingCompleted: StateFlow<Boolean> = _onboardingCompleted.asStateFlow()
 
+    private val _selectedProvider = MutableStateFlow(prefs.getString(KEY_PROVIDER, DEFAULT_PROVIDER) ?: DEFAULT_PROVIDER)
+    val selectedProvider: StateFlow<String> = _selectedProvider.asStateFlow()
+
+    private val _openRouterApiKey = MutableStateFlow(prefs.getString(KEY_OPENROUTER_API_KEY, "") ?: "")
+    val openRouterApiKey: StateFlow<String> = _openRouterApiKey.asStateFlow()
+
+    private val _openRouterModel = MutableStateFlow(
+        prefs.getString(KEY_OPENROUTER_MODEL, DEFAULT_OPENROUTER_MODEL) ?: DEFAULT_OPENROUTER_MODEL
+    )
+    val openRouterModel: StateFlow<String> = _openRouterModel.asStateFlow()
+
+    // ── Gemini ───────────────────────────────────────────────────────────────
+
     fun getEffectiveApiKey(): String {
         val custom = prefs.getString(KEY_CUSTOM_API_KEY, "") ?: ""
         if (custom.isNotBlank()) return custom
-        return BuildConfig.GEMINI_API_KEY.ifBlank { "" }
+        val configured = BuildConfig.GEMINI_API_KEY
+        return if (configured.isBlank() || configured == PLACEHOLDER_API_KEY) "" else configured
     }
 
     fun setCustomApiKey(key: String) {
@@ -55,6 +100,37 @@ class AgentPreferences(private val context: Context) {
         prefs.edit().putString(KEY_SELECTED_MODEL, model).apply()
         _selectedModel.value = model
     }
+
+    // ── OpenRouter ───────────────────────────────────────────────────────────
+
+    fun getEffectiveOpenRouterKey(): String {
+        return prefs.getString(KEY_OPENROUTER_API_KEY, "") ?: ""
+    }
+
+    fun setOpenRouterApiKey(key: String) {
+        prefs.edit().putString(KEY_OPENROUTER_API_KEY, key.trim()).apply()
+        _openRouterApiKey.value = key.trim()
+    }
+
+    fun setOpenRouterModel(model: String) {
+        prefs.edit().putString(KEY_OPENROUTER_MODEL, model).apply()
+        _openRouterModel.value = model
+    }
+
+    // ── Provider ─────────────────────────────────────────────────────────────
+
+    fun setProvider(provider: String) {
+        prefs.edit().putString(KEY_PROVIDER, provider).apply()
+        _selectedProvider.value = provider
+    }
+
+    /** Returns the active model ID regardless of provider. */
+    fun getActiveModel(): String = when (_selectedProvider.value) {
+        "openrouter" -> _openRouterModel.value
+        else -> _selectedModel.value
+    }
+
+    // ── Shared settings ──────────────────────────────────────────────────────
 
     fun setSafetyGuardrails(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_SAFETY_GUARDRAILS, enabled).apply()

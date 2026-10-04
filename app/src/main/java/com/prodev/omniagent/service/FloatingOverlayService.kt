@@ -62,6 +62,7 @@ import com.prodev.omniagent.ui.theme.MyApplicationTheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -76,6 +77,7 @@ class FloatingOverlayService : Service() {
         const val ACTION_UPDATE_FGS_TYPE = "com.prodev.omniagent.service.ACTION_UPDATE_FGS_TYPE"
         private const val NOTIFICATION_ID = 9001
         private const val CHANNEL_ID = "omniagent_overlay_service_channel"
+        private const val LONG_PRESS_THRESHOLD_MS = 500L
 
         private val _isServiceActive = MutableStateFlow(false)
         val isServiceActive: StateFlow<Boolean> = _isServiceActive.asStateFlow()
@@ -184,6 +186,7 @@ class FloatingOverlayService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        serviceScope.cancel()
         speechManager.stopListening()
         serviceLifecycleOwner?.destroy()
         removeViews()
@@ -413,14 +416,17 @@ class FloatingOverlayService : Service() {
 
                 MotionEvent.ACTION_UP -> {
                     val clickDuration = System.currentTimeMillis() - pressStartTime
-                    if (!isDragging && clickDuration < 300) {
-                        v.performClick()
-                    } else if (!isDragging && clickDuration >= 500) {
-                        // Long press
-                        val intent = Intent(this@FloatingOverlayService, MainActivity::class.java).apply {
-                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    if (!isDragging) {
+                        if (clickDuration < LONG_PRESS_THRESHOLD_MS) {
+                            // Short tap -> toggle the chat panel
+                            v.performClick()
+                        } else {
+                            // Long press -> reopen the main dashboard
+                            val intent = Intent(this@FloatingOverlayService, MainActivity::class.java).apply {
+                                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                            }
+                            startActivity(intent)
                         }
-                        startActivity(intent)
                     }
                     true
                 }

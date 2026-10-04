@@ -2,8 +2,6 @@ package com.prodev.omniagent.ai
 
 import android.graphics.Bitmap
 import android.util.Base64
-import com.squareup.moshi.Moshi
-import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -21,10 +19,6 @@ class GeminiAgentRepository {
         .connectTimeout(60, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
-        .build()
-
-    private val moshi = Moshi.Builder()
-        .add(KotlinJsonAdapterFactory())
         .build()
 
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
@@ -75,6 +69,70 @@ class GeminiAgentRepository {
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    /**
+     * Fetches the live list of Gemini models available for the given API key.
+     * Only returns models that support the [generateContent] method.
+     *
+     * Falls back to a small static list if the key is empty or the request fails.
+     */
+    suspend fun fetchGeminiModels(apiKey: String): Result<List<AvailableModel>> = withContext(Dispatchers.IO) {
+        if (apiKey.isBlank()) {
+            return@withContext Result.success(FALLBACK_GEMINI_MODELS)
+        }
+        try {
+            val url = "https://generativelanguage.googleapis.com/v1beta/models?key=$apiKey&pageSize=100"
+            val request = Request.Builder().url(url).get().build()
+            val response = client.newCall(request).execute()
+            val bodyString = response.body?.string() ?: ""
+
+            if (!response.isSuccessful) {
+                return@withContext Result.success(FALLBACK_GEMINI_MODELS)
+            }
+
+            val modelsArray = JSONObject(bodyString).optJSONArray("models")
+                ?: return@withContext Result.success(FALLBACK_GEMINI_MODELS)
+
+            val list = mutableListOf<AvailableModel>()
+            for (i in 0 until modelsArray.length()) {
+                val m = modelsArray.optJSONObject(i) ?: continue
+                val rawName = m.optString("name") // "models/gemini-1.5-flash"
+                val modelId = rawName.removePrefix("models/")
+                if (modelId.isBlank()) continue
+
+                // Only include models that actually support generateContent
+                val methodsArray = m.optJSONArray("supportedGenerationMethods") ?: continue
+                val supportsGenerate = (0 until methodsArray.length()).any {
+                    methodsArray.optString(it) == "generateContent"
+                }
+                if (!supportsGenerate) continue
+
+                list.add(
+                    AvailableModel(
+                        id = modelId,
+                        displayName = m.optString("displayName", modelId),
+                        description = m.optString("description", ""),
+                        provider = "gemini"
+                    )
+                )
+            }
+
+            if (list.isEmpty()) Result.success(FALLBACK_GEMINI_MODELS)
+            else Result.success(list)
+        } catch (e: Exception) {
+            Result.success(FALLBACK_GEMINI_MODELS) // Never leave the user with a broken picker
+        }
+    }
+
+    companion object {
+        /** Static fallback shown when no API key is entered or the network call fails. */
+        val FALLBACK_GEMINI_MODELS = listOf(
+            AvailableModel("gemini-2.0-flash", "Gemini 2.0 Flash", "Fast, multimodal — recommended", "gemini"),
+            AvailableModel("gemini-2.0-flash-lite", "Gemini 2.0 Flash Lite", "Ultra-low latency", "gemini"),
+            AvailableModel("gemini-1.5-pro", "Gemini 1.5 Pro", "Deep reasoning, large context", "gemini"),
+            AvailableModel("gemini-1.5-flash", "Gemini 1.5 Flash", "Balanced speed & quality", "gemini"),
+        )
     }
 
     suspend fun getNextAgentAction(

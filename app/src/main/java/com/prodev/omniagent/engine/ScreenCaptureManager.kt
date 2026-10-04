@@ -51,7 +51,7 @@ class ScreenCaptureManager(private val context: Context) {
 
     @Synchronized
     private fun initSession(): Boolean {
-        if (virtualDisplay != null && imageReader != null && mediaProjection != null) {
+        if (virtualDisplay != null && imageReader != null) {
             return true
         }
 
@@ -77,31 +77,34 @@ class ScreenCaptureManager(private val context: Context) {
             scaledHeight = metrics.heightPixels / 2
             val density = metrics.densityDpi
 
-            val reader = ImageReader.newInstance(scaledWidth, scaledHeight, PixelFormat.RGBA_8888, 2)
-            val projection = try {
+            val handler = Handler(Looper.getMainLooper())
+
+            // Android 14+ only permits a captured-consent Intent to be used ONCE. Obtain the
+            // MediaProjection a single time and reuse it across capture sessions; tearing the
+            // VirtualDisplay down between sessions no longer invalidates the projection.
+            val projection = mediaProjection ?: try {
                 projectionManager.getMediaProjection(projectionResultCode, data.clone() as Intent)
             } catch (se: SecurityException) {
                 Log.w(TAG, "MediaProjection token expired or rejected: ${se.message}")
                 clearProjectionResult()
-                try { reader.close() } catch (_: Throwable) {}
                 return false
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to obtain MediaProjection: ${e.message}")
-                try { reader.close() } catch (_: Throwable) {}
                 return false
-            } ?: run {
-                try { reader.close() } catch (_: Throwable) {}
-                return false
+            } ?: run { return false }
+
+            val isNewProjection = mediaProjection == null
+            if (isNewProjection) {
+                projection.registerCallback(object : MediaProjection.Callback() {
+                    override fun onStop() {
+                        Log.d(TAG, "MediaProjection stopped by system")
+                        releaseProjection()
+                    }
+                }, handler)
+                mediaProjection = projection
             }
 
-            val handler = Handler(Looper.getMainLooper())
-
-            projection.registerCallback(object : MediaProjection.Callback() {
-                override fun onStop() {
-                    Log.d(TAG, "MediaProjection stopped by system")
-                    stopSession()
-                }
-            }, handler)
+            val reader = ImageReader.newInstance(scaledWidth, scaledHeight, PixelFormat.RGBA_8888, 2)
 
             val display = try {
                 projection.createVirtualDisplay(
@@ -118,16 +121,15 @@ class ScreenCaptureManager(private val context: Context) {
                 Log.w(TAG, "createVirtualDisplay rejected: ${se.message}")
                 clearProjectionResult()
                 try { reader.close() } catch (_: Throwable) {}
-                try { projection.stop() } catch (_: Throwable) {}
+                releaseProjection()
                 return false
             } catch (e: Exception) {
                 Log.w(TAG, "createVirtualDisplay failed: ${e.message}")
                 try { reader.close() } catch (_: Throwable) {}
-                try { projection.stop() } catch (_: Throwable) {}
+                if (isNewProjection) releaseProjection()
                 return false
             }
 
-            this.mediaProjection = projection
             this.virtualDisplay = display
             this.imageReader = reader
             return true
@@ -190,13 +192,22 @@ class ScreenCaptureManager(private val context: Context) {
         virtualDisplay = null
 
         try {
-            mediaProjection?.stop()
-        } catch (_: Throwable) {}
-        mediaProjection = null
-
-        try {
             imageReader?.close()
         } catch (_: Throwable) {}
         imageReader = null
+    }
+
+    /**
+     * Fully tears down the capture session INCLUDING the [MediaProjection]. Use this only when
+     * the projection is known to be invalid (system stop or revoked consent); regular session
+     * teardown must use [stopSession] so that the single-use consent token remains reusable.
+     */
+    @Synchronized
+    fun releaseProjection() {
+        stopSession()
+        try {
+            mediaProjection?.stop()
+        } catch (_: Throwable) {}
+        mediaProjection = null
     }
 }

@@ -310,13 +310,7 @@ fun DashboardScreen(
                         }
 
                         Button(
-                            onClick = {
-                                if (isServiceActive) {
-                                    viewModel.toggleAgentService()
-                                } else {
-                                    viewModel.toggleAgentService()
-                                }
-                            },
+                            onClick = { viewModel.toggleAgentService() },
                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
                             modifier = Modifier
                                 .weight(1f)
