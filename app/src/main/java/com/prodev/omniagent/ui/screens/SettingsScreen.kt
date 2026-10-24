@@ -178,6 +178,20 @@ private fun GeminiConfigCard(viewModel: MainViewModel, testState: ConnectionTest
 
     var showPassword by remember { mutableStateOf(false) }
     var modelDropdownExpanded by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+
+    val filteredGeminiModels = remember(geminiModels, searchQuery) {
+        if (searchQuery.isBlank()) {
+            geminiModels
+        } else {
+            val q = searchQuery.trim().lowercase()
+            geminiModels.filter {
+                it.id.lowercase().contains(q) ||
+                it.displayName.lowercase().contains(q) ||
+                it.description.lowercase().contains(q)
+            }
+        }
+    }
 
     Card(
         shape = RoundedCornerShape(20.dp),
@@ -256,7 +270,11 @@ private fun GeminiConfigCard(viewModel: MainViewModel, testState: ConnectionTest
 
                     ExposedDropdownMenu(
                         expanded = modelDropdownExpanded,
-                        onDismissRequest = { modelDropdownExpanded = false }
+                        onDismissRequest = {
+                            modelDropdownExpanded = false
+                            searchQuery = ""
+                        },
+                        modifier = Modifier.heightIn(max = 380.dp)
                     ) {
                         if (modelsLoading) {
                             DropdownMenuItem(
@@ -275,15 +293,55 @@ private fun GeminiConfigCard(viewModel: MainViewModel, testState: ConnectionTest
                                 onClick = { modelDropdownExpanded = false }
                             )
                         } else {
-                            geminiModels.forEach { model ->
-                                ModelDropdownItem(
-                                    model = model,
-                                    isSelected = model.id == selectedModel,
-                                    onClick = {
-                                        prefs.setSelectedModel(model.id)
-                                        modelDropdownExpanded = false
-                                    }
+                            if (geminiModels.size > 4) {
+                                OutlinedTextField(
+                                    value = searchQuery,
+                                    onValueChange = { searchQuery = it },
+                                    placeholder = { Text("Search Gemini models...", fontSize = 13.sp) },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    },
+                                    trailingIcon = {
+                                        if (searchQuery.isNotEmpty()) {
+                                            IconButton(onClick = { searchQuery = "" }, modifier = Modifier.size(24.dp)) {
+                                                Icon(Icons.Default.Clear, contentDescription = "Clear search", modifier = Modifier.size(16.dp))
+                                            }
+                                        }
+                                    },
+                                    singleLine = true,
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                                        .testTag("gemini_model_search")
                                 )
+
+                                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                            }
+
+                            if (filteredGeminiModels.isEmpty()) {
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            "No models matching \"$searchQuery\"",
+                                            fontSize = 13.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    },
+                                    onClick = {}
+                                )
+                            } else {
+                                filteredGeminiModels.forEach { model ->
+                                    ModelDropdownItem(
+                                        model = model,
+                                        isSelected = model.id == selectedModel,
+                                        onClick = {
+                                            prefs.setSelectedModel(model.id)
+                                            modelDropdownExpanded = false
+                                            searchQuery = ""
+                                        }
+                                    )
+                                }
                             }
                         }
                     }
@@ -337,6 +395,20 @@ private fun OpenRouterConfigCard(viewModel: MainViewModel, testState: Connection
 
     var showPassword by remember { mutableStateOf(false) }
     var modelDropdownExpanded by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+
+    val filteredModels = remember(openRouterModels, searchQuery) {
+        if (searchQuery.isBlank()) {
+            openRouterModels.take(50)
+        } else {
+            val q = searchQuery.trim().lowercase()
+            openRouterModels.filter {
+                it.id.lowercase().contains(q) ||
+                it.displayName.lowercase().contains(q) ||
+                it.description.lowercase().contains(q)
+            }.take(50)
+        }
+    }
 
     Card(
         shape = RoundedCornerShape(20.dp),
@@ -415,7 +487,11 @@ private fun OpenRouterConfigCard(viewModel: MainViewModel, testState: Connection
 
                     ExposedDropdownMenu(
                         expanded = modelDropdownExpanded,
-                        onDismissRequest = { modelDropdownExpanded = false }
+                        onDismissRequest = {
+                            modelDropdownExpanded = false
+                            searchQuery = ""
+                        },
+                        modifier = Modifier.heightIn(max = 380.dp)
                     ) {
                         if (modelsLoading) {
                             DropdownMenuItem(
@@ -428,16 +504,72 @@ private fun OpenRouterConfigCard(viewModel: MainViewModel, testState: Connection
                                 },
                                 onClick = {}
                             )
+                        } else if (openRouterModels.isEmpty()) {
+                            DropdownMenuItem(
+                                text = { Text("Enter API key & tap ↻ Refresh", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) },
+                                onClick = { modelDropdownExpanded = false }
+                            )
                         } else {
-                            openRouterModels.forEach { model ->
-                                ModelDropdownItem(
-                                    model = model,
-                                    isSelected = model.id == selectedModel,
-                                    onClick = {
-                                        prefs.setOpenRouterModel(model.id)
-                                        modelDropdownExpanded = false
+                            OutlinedTextField(
+                                value = searchQuery,
+                                onValueChange = { searchQuery = it },
+                                placeholder = { Text("Search models...", fontSize = 13.sp) },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp))
+                                },
+                                trailingIcon = {
+                                    if (searchQuery.isNotEmpty()) {
+                                        IconButton(onClick = { searchQuery = "" }, modifier = Modifier.size(24.dp)) {
+                                            Icon(Icons.Default.Clear, contentDescription = "Clear search", modifier = Modifier.size(16.dp))
+                                        }
                                     }
+                                },
+                                singleLine = true,
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                                    .testTag("openrouter_model_search")
+                            )
+
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+                            if (filteredModels.isEmpty()) {
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            "No models matching \"$searchQuery\"",
+                                            fontSize = 13.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    },
+                                    onClick = {}
                                 )
+                            } else {
+                                filteredModels.forEach { model ->
+                                    ModelDropdownItem(
+                                        model = model,
+                                        isSelected = model.id == selectedModel,
+                                        onClick = {
+                                            prefs.setOpenRouterModel(model.id)
+                                            modelDropdownExpanded = false
+                                            searchQuery = ""
+                                        }
+                                    )
+                                }
+
+                                if (searchQuery.isBlank() && openRouterModels.size > 50) {
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                "Showing top 50 of ${openRouterModels.size} models. Type in search to find more.",
+                                                fontSize = 11.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        },
+                                        onClick = {}
+                                    )
+                                }
                             }
                         }
                     }
@@ -569,6 +701,8 @@ private fun SafetyPrivacyCard(prefs: com.prodev.omniagent.data.prefs.AgentPrefer
     val safetyGuardrails by prefs.safetyGuardrails.collectAsState()
     val privacyShield by prefs.privacyShield.collectAsState()
     val voiceMode by prefs.voiceMode.collectAsState()
+    val maxTasks by prefs.maxTasksPerMessage.collectAsState()
+    var sliderPosition by remember(maxTasks) { mutableStateOf(maxTasks.toFloat()) }
 
     Card(
         shape = RoundedCornerShape(20.dp),
@@ -652,6 +786,57 @@ private fun SafetyPrivacyCard(prefs: com.prodev.omniagent.data.prefs.AgentPrefer
                     onCheckedChange = { prefs.setVoiceMode(it) },
                     modifier = Modifier.testTag("voice_mode_toggle")
                 )
+            }
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+            // Max Tasks Per Message Slider
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Max Tasks Per Message", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                        Text(
+                            "Maximum number of AI actions the agent can execute per single message before pausing.",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Surface(
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text(
+                            "${sliderPosition.toInt()}",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+                Slider(
+                    value = sliderPosition,
+                    onValueChange = { sliderPosition = it },
+                    onValueChangeFinished = { prefs.setMaxTasksPerMessage(sliderPosition.toInt()) },
+                    valueRange = 3f..50f,
+                    steps = 46,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("max_tasks_slider")
+                )
+                Row(
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("3", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("50", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
         }
     }

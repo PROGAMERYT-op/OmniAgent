@@ -95,6 +95,7 @@ data class GeminiError(
 // Internal Agent Tool Call result for execution engine
 sealed class AgentAction {
     data class OpenApp(val packageName: String) : AgentAction()
+    data class SearchApps(val query: String) : AgentAction()
     data class ClickElementByText(val text: String) : AgentAction()
     data class ClickAtCoordinates(val x: Int, val y: Int) : AgentAction()
     data class TypeText(val elementTextOrId: String, val text: String) : AgentAction()

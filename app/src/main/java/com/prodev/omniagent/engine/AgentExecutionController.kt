@@ -29,10 +29,11 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import org.json.JSONArray
+import kotlinx.coroutines.CancellableContinuation
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.suspendCancellableCoroutine
 import java.util.UUID
-import kotlin.coroutines.Continuation
 import kotlin.coroutines.resume
-import kotlin.coroutines.suspendCoroutine
 
 data class ChatMessageItem(
     val id: String = UUID.randomUUID().toString(),
@@ -66,7 +67,7 @@ class AgentExecutionController(
 ) {
     companion object {
         private const val TAG = "AgentController"
-        private const val MAX_STEPS = 12
+        private const val DEFAULT_MAX_STEPS = 15
 
         @Volatile
         private var INSTANCE: AgentExecutionController? = null
@@ -97,7 +98,7 @@ class AgentExecutionController(
     private val _hudEvents = MutableSharedFlow<HUDPointerEvent>(extraBufferCapacity = 8)
     val hudEvents: SharedFlow<HUDPointerEvent> = _hudEvents.asSharedFlow()
 
-    private var pendingConfirmationContinuation: Continuation<Boolean>? = null
+    private var pendingConfirmationContinuation: CancellableContinuation<Boolean>? = null
 
     private val database = AppDatabase.getDatabase(context)
 
@@ -115,8 +116,11 @@ class AgentExecutionController(
     fun stopCurrentExecution() {
         currentExecutionJob?.cancel()
         currentExecutionJob = null
-        pendingConfirmationContinuation?.resume(false)
+        val cont = pendingConfirmationContinuation
         pendingConfirmationContinuation = null
+        if (cont?.isActive == true) {
+            cont.resume(false)
+        }
         screenCaptureManager.stopSession()
         _state.value = AgentExecutionState.Idle
     }
@@ -124,7 +128,9 @@ class AgentExecutionController(
     fun confirmAction(approved: Boolean) {
         val cont = pendingConfirmationContinuation
         pendingConfirmationContinuation = null
-        cont?.resume(approved)
+        if (cont?.isActive == true) {
+            cont.resume(approved)
+        }
     }
 
     fun clearMessages() {
@@ -158,11 +164,13 @@ class AgentExecutionController(
         val safetyGuardrails = preferences.safetyGuardrails.value
 
         val actionHistory = mutableListOf<String>()
+        val (screenWidth, screenHeight) = ScreenCaptureManager.getRealScreenDimensions(context)
 
         addMessage("agent", "Analyzing screen and planning steps for: \"$userGoal\"...")
 
         try {
-            for (step in 1..MAX_STEPS) {
+            val maxTasks = preferences.maxTasksPerMessage.value.coerceIn(3, 50)
+            for (step in 1..maxTasks) {
                 _state.value = AgentExecutionState.ReadingScreen(step)
 
                 // Step 1: Read sanitized DOM node hierarchy
@@ -178,7 +186,7 @@ class AgentExecutionController(
                         val sensitiveBounds = if (privacyShield) {
                             sanitizedNodes.filter { it.isSensitive }.map { it.bounds }
                         } else emptyList<Rect>()
-                        screenshotBitmap = PrivacyEngine.maskSensitiveRegions(rawBitmap, sensitiveBounds)
+                        screenshotBitmap = PrivacyEngine.maskSensitiveRegions(rawBitmap, sensitiveBounds, screenWidth, screenHeight)
                     }
                 }
 
@@ -195,7 +203,9 @@ class AgentExecutionController(
                             userGoal = userGoal,
                             screenHierarchyText = hierarchyText,
                             screenBitmap = screenshotBitmap,
-                            actionHistory = actionHistory
+                            actionHistory = actionHistory,
+                            screenWidth = screenWidth,
+                            screenHeight = screenHeight
                         )
                     }
                     else -> {
@@ -205,7 +215,9 @@ class AgentExecutionController(
                             userGoal = userGoal,
                             screenHierarchyText = hierarchyText,
                             screenBitmap = screenshotBitmap,
-                            actionHistory = actionHistory
+                            actionHistory = actionHistory,
+                            screenWidth = screenWidth,
+                            screenHeight = screenHeight
                         )
                     }
                 }
@@ -239,8 +251,11 @@ class AgentExecutionController(
                     _state.value = AgentExecutionState.AwaitingConfirmation(desc)
                     addMessage("system", "🔒 Sensitive Action Intercepted: $desc. Awaiting your approval...")
 
-                    val approved = suspendCoroutine { cont ->
+                    val approved = suspendCancellableCoroutine<Boolean> { cont ->
                         pendingConfirmationContinuation = cont
+                        cont.invokeOnCancellation {
+                            pendingConfirmationContinuation = null
+                        }
                     }
 
                     if (!approved) {
@@ -263,8 +278,8 @@ class AgentExecutionController(
                 delay(800)
             }
 
-            _state.value = AgentExecutionState.Completed("Reached maximum step limit (12). Task completed or paused.")
-            addMessage("system", "Execution paused: Completed maximum sequence steps.")
+            _state.value = AgentExecutionState.Completed("Reached maximum task limit ($maxTasks). Task completed or paused.")
+            addMessage("system", "Execution paused: Completed maximum task sequence limit ($maxTasks tasks).")
         } finally {
             screenCaptureManager.stopSession()
         }
@@ -282,6 +297,7 @@ class AgentExecutionController(
     private fun getActionDescription(action: AgentAction): String {
         return when (action) {
             is AgentAction.OpenApp -> "Open app (${action.packageName})"
+            is AgentAction.SearchApps -> "Search installed apps (\"${action.query}\")"
             is AgentAction.ClickElementByText -> "Click \"${action.text}\""
             is AgentAction.ClickAtCoordinates -> "Tap at screen (${action.x}, ${action.y})"
             is AgentAction.TypeText -> "Type \"${action.text}\""
@@ -305,16 +321,33 @@ class AgentExecutionController(
             when (action) {
                 is AgentAction.OpenApp -> {
                     _state.value = AgentExecutionState.Executing(step, "Launching ${action.packageName}")
-                    val intent = context.packageManager.getLaunchIntentForPackage(action.packageName)
-                    if (intent != null) {
+                    val resolved = AppSearchHelper.resolveLaunchIntent(context, action.packageName)
+                    if (resolved != null) {
+                        val (intent, appInfo) = resolved
                         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         context.startActivity(intent)
                         triggerHapticFeedback()
+                        val msg = "Launched ${appInfo.label} (${appInfo.packageName})"
+                        addMessage("agent", msg)
                         true
                     } else {
-                        addMessage("system", "App not found: ${action.packageName}")
+                        val msg = "App not found: \"${action.packageName}\". Try calling searchApps to find available installed apps."
+                        addMessage("system", msg)
                         false
                     }
+                }
+
+                is AgentAction.SearchApps -> {
+                    _state.value = AgentExecutionState.Executing(step, "Searching installed apps for \"${action.query}\"")
+                    val found = AppSearchHelper.searchInstalledApps(context, action.query)
+                    val resultSummary = if (found.isNotEmpty()) {
+                        "Found ${found.size} matching installed app(s):\n" +
+                            found.take(6).joinToString("\n") { "• ${it.label}: ${it.packageName}" }
+                    } else {
+                        "No installed apps found matching \"${action.query}\""
+                    }
+                    addMessage("tool", resultSummary)
+                    true
                 }
 
                 is AgentAction.ClickElementByText -> {
@@ -325,10 +358,13 @@ class AgentExecutionController(
                 }
 
                 is AgentAction.ClickAtCoordinates -> {
-                    _state.value = AgentExecutionState.Executing(step, "Tapping at (${action.x}, ${action.y})", action.x, action.y)
-                    _hudEvents.emit(HUDPointerEvent(action.x, action.y, "Tap"))
+                    val (screenWidth, screenHeight) = ScreenCaptureManager.getRealScreenDimensions(context)
+                    val targetX = action.x.coerceIn(0, screenWidth)
+                    val targetY = action.y.coerceIn(0, screenHeight)
+                    _state.value = AgentExecutionState.Executing(step, "Tapping at ($targetX, $targetY)", targetX, targetY)
+                    _hudEvents.emit(HUDPointerEvent(targetX, targetY, "Tap"))
                     triggerHapticFeedback()
-                    accessibility.clickCoordinates(action.x.toFloat(), action.y.toFloat())
+                    accessibility.clickCoordinates(targetX.toFloat(), targetY.toFloat())
                 }
 
                 is AgentAction.TypeText -> {
@@ -352,7 +388,10 @@ class AgentExecutionController(
                 }
 
                 is AgentAction.ShowHUD -> {
-                    _hudEvents.emit(HUDPointerEvent(action.x, action.y, "Pointer"))
+                    val (screenWidth, screenHeight) = ScreenCaptureManager.getRealScreenDimensions(context)
+                    val targetX = action.x.coerceIn(0, screenWidth)
+                    val targetY = action.y.coerceIn(0, screenHeight)
+                    _hudEvents.emit(HUDPointerEvent(targetX, targetY, "Pointer"))
                     true
                 }
 
@@ -375,6 +414,7 @@ class AgentExecutionController(
                 is AgentAction.Unknown -> false
             }
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             Log.e(TAG, "Error executing action: ${e.message}", e)
             false
         }

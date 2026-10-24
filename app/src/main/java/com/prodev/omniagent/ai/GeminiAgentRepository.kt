@@ -141,7 +141,9 @@ class GeminiAgentRepository {
         userGoal: String,
         screenHierarchyText: String,
         screenBitmap: Bitmap?,
-        actionHistory: List<String>
+        actionHistory: List<String>,
+        screenWidth: Int = 1080,
+        screenHeight: Int = 2400
     ): Result<AgentStepResult> = withContext(Dispatchers.IO) {
         if (apiKey.isBlank()) {
             return@withContext Result.failure(IllegalStateException("Missing Gemini API Key. Please configure in Settings."))
@@ -154,15 +156,19 @@ class GeminiAgentRepository {
                 You are OmniAgent AI, an expert autonomous smartphone assistant.
                 You are operating the user's Android phone to accomplish their goal: "$userGoal".
                 
+                Device Display Resolution: ${screenWidth} x ${screenHeight} physical pixels.
+                
                 You have access to:
-                1. The Accessibility Node tree representing interactive UI components with their bounds (x,y coordinates).
+                1. The Accessibility Node tree representing interactive UI components with their bounds (x,y coordinates in physical screen pixels).
                 2. Real-time visual screenshot (if provided) when standard DOM elements are not visible.
                 
                 CRITICAL RULES:
                 - Review the screen state carefully.
                 - Call ONE tool function at a time to advance towards the goal.
                 - Prefer clickElementByText if the target text is clearly visible in the node tree.
-                - Use clickAtCoordinates(x, y) if coordinates are clear or from visual screenshot.
+                - When tapping using clickAtCoordinates(x, y), always provide coordinates in the device's physical screen pixel space [0..$screenWidth, 0..$screenHeight]. Do NOT use normalized 0-1000 coordinates.
+                - To launch an application, use openApp. You can pass either the package name (e.g. 'com.google.android.youtube') or the common app name (e.g. 'Clock', 'YouTube', 'Settings').
+                - If you are unsure of an app's package name or want to discover what apps are installed, call searchApps(query) to find matching installed apps and their package names.
                 - If an action involves sensitive financial, payment, account deletion, or high-risk actions, YOU MUST CALL requestUserConfirmation first!
                 - When the user goal is completely fulfilled, call agentFinished(summaryMessage).
                 - Keep your reasoning concise and state your next thought.
@@ -187,12 +193,16 @@ class GeminiAgentRepository {
                 // Text part with goal, screen hierarchy and action history
                 val contextPrompt = buildString {
                     appendLine("User Goal: $userGoal")
+                    appendLine("Device Display Resolution: ${screenWidth}x${screenHeight} pixels")
                     if (actionHistory.isNotEmpty()) {
                         appendLine("\nActions Executed So Far:")
                         actionHistory.takeLast(6).forEach { appendLine("- $it") }
                     }
                     appendLine("\nCurrent Screen Hierarchy:")
                     appendLine(screenHierarchyText.take(15000))
+                    if (screenBitmap != null) {
+                        appendLine("\nVisual screenshot attached (${screenBitmap.width}x${screenBitmap.height}px, scaled from device resolution ${screenWidth}x${screenHeight}px). If tapping based on visual screenshot, map coordinates to the full ${screenWidth}x${screenHeight} space.")
+                    }
                     appendLine("\nWhat is the next step to execute? Explain your thought and invoke the corresponding tool.")
                 }
                 partsArray.put(JSONObject().put("text", contextPrompt))
@@ -287,7 +297,8 @@ class GeminiAgentRepository {
                 val args = fnCall.optJSONObject("args") ?: JSONObject()
 
                 action = when (name) {
-                    "openApp" -> AgentAction.OpenApp(args.optString("packageName"))
+                    "openApp" -> AgentAction.OpenApp(args.optString("packageName", args.optString("appNameOrPackage", "")))
+                    "searchApps" -> AgentAction.SearchApps(args.optString("query"))
                     "clickElementByText" -> AgentAction.ClickElementByText(args.optString("text"))
                     "clickAtCoordinates" -> AgentAction.ClickAtCoordinates(
                         args.optInt("x", 0),
@@ -333,16 +344,31 @@ class GeminiAgentRepository {
 
         array.put(JSONObject().apply {
             put("name", "openApp")
-            put("description", "Opens an application by its Android package name.")
+            put("description", "Opens an application by its package name (e.g. 'com.google.android.youtube') or common name (e.g. 'YouTube', 'Clock', 'Settings'). If not exact, the system automatically resolves the closest installed app.")
             put("parameters", JSONObject().apply {
                 put("type", "OBJECT")
                 put("properties", JSONObject().apply {
                     put("packageName", JSONObject().apply {
                         put("type", "STRING")
-                        put("description", "e.g. com.google.android.youtube or com.google.android.deskclock")
+                        put("description", "Package name or application display name, e.g. 'com.google.android.deskclock' or 'Clock'")
                     })
                 })
                 put("required", JSONArray().apply { put("packageName") })
+            })
+        })
+
+        array.put(JSONObject().apply {
+            put("name", "searchApps")
+            put("description", "Searches installed apps on the device by keyword or name (e.g. 'clock', 'settings', 'camera', 'notes') to discover their exact package names.")
+            put("parameters", JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("query", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "App name or keyword to search, e.g. 'clock', 'notes', or 'settings'")
+                    })
+                })
+                put("required", JSONArray().apply { put("query") })
             })
         })
 
@@ -363,12 +389,12 @@ class GeminiAgentRepository {
 
         array.put(JSONObject().apply {
             put("name", "clickAtCoordinates")
-            put("description", "Simulates a touch tap gesture at specific screen (X, Y) pixel coordinates.")
+            put("description", "Simulates a touch tap gesture at specific screen (X, Y) physical pixel coordinates.")
             put("parameters", JSONObject().apply {
                 put("type", "OBJECT")
                 put("properties", JSONObject().apply {
-                    put("x", JSONObject().put("type", "INTEGER").put("description", "X pixel coordinate"))
-                    put("y", JSONObject().put("type", "INTEGER").put("description", "Y pixel coordinate"))
+                    put("x", JSONObject().put("type", "INTEGER").put("description", "X coordinate in physical device screen pixels"))
+                    put("y", JSONObject().put("type", "INTEGER").put("description", "Y coordinate in physical device screen pixels"))
                 })
                 put("required", JSONArray().apply { put("x"); put("y") })
             })

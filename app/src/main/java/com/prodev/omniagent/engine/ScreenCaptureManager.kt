@@ -41,6 +41,16 @@ class ScreenCaptureManager(private val context: Context) {
             projectionData = null
             projectionResultCode = Activity.RESULT_CANCELED
         }
+
+        fun getRealScreenDimensions(context: Context): Pair<Int, Int> {
+            val wm = context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+            val metrics = DisplayMetrics()
+            @Suppress("DEPRECATION")
+            wm?.defaultDisplay?.getRealMetrics(metrics)
+            val width = if (metrics.widthPixels > 0) metrics.widthPixels else context.resources.displayMetrics.widthPixels
+            val height = if (metrics.heightPixels > 0) metrics.heightPixels else context.resources.displayMetrics.heightPixels
+            return Pair(width, height)
+        }
     }
 
     private var mediaProjection: MediaProjection? = null

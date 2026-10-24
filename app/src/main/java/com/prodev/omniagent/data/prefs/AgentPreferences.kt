@@ -40,10 +40,12 @@ class AgentPreferences private constructor(context: Context) {
         const val KEY_PROVIDER = "selected_provider"
         const val KEY_OPENROUTER_API_KEY = "openrouter_api_key"
         const val KEY_OPENROUTER_MODEL = "openrouter_selected_model"
+        const val KEY_MAX_TASKS = "max_tasks_per_message"
 
         const val DEFAULT_MODEL = "gemini-2.0-flash"
         const val DEFAULT_PROVIDER = "gemini"
         const val DEFAULT_OPENROUTER_MODEL = "mistralai/mixtral-8x7b-instruct"
+        const val DEFAULT_MAX_TASKS = 15
 
         /**
          * Placeholder shipped in `.env.example`. It is a syntactically valid key shaped string
@@ -81,6 +83,11 @@ class AgentPreferences private constructor(context: Context) {
         prefs.getString(KEY_OPENROUTER_MODEL, DEFAULT_OPENROUTER_MODEL) ?: DEFAULT_OPENROUTER_MODEL
     )
     val openRouterModel: StateFlow<String> = _openRouterModel.asStateFlow()
+
+    private val _maxTasksPerMessage = MutableStateFlow(
+        prefs.getInt(KEY_MAX_TASKS, DEFAULT_MAX_TASKS).coerceIn(3, 50)
+    )
+    val maxTasksPerMessage: StateFlow<Int> = _maxTasksPerMessage.asStateFlow()
 
     // ── Gemini ───────────────────────────────────────────────────────────────
 
@@ -150,5 +157,11 @@ class AgentPreferences private constructor(context: Context) {
     fun setOnboardingCompleted(completed: Boolean) {
         prefs.edit().putBoolean(KEY_ONBOARDING_DONE, completed).apply()
         _onboardingCompleted.value = completed
+    }
+
+    fun setMaxTasksPerMessage(tasks: Int) {
+        val clamped = tasks.coerceIn(3, 50)
+        prefs.edit().putInt(KEY_MAX_TASKS, clamped).apply()
+        _maxTasksPerMessage.value = clamped
     }
 }

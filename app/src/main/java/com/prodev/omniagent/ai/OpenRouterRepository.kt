@@ -124,7 +124,9 @@ class OpenRouterRepository {
         userGoal: String,
         screenHierarchyText: String,
         screenBitmap: Bitmap?,
-        actionHistory: List<String>
+        actionHistory: List<String>,
+        screenWidth: Int = 1080,
+        screenHeight: Int = 2400
     ): Result<AgentStepResult> = withContext(Dispatchers.IO) {
         if (apiKey.isBlank()) {
             return@withContext Result.failure(IllegalStateException("Missing OpenRouter API key. Please configure in Settings."))
@@ -135,15 +137,19 @@ class OpenRouterRepository {
                 You are OmniAgent AI, an expert autonomous smartphone assistant.
                 You are operating the user's Android phone to accomplish their goal: "$userGoal".
 
+                Device Display Resolution: ${screenWidth} x ${screenHeight} physical pixels.
+
                 You have access to:
-                1. The Accessibility Node tree representing interactive UI components with their bounds (x,y coordinates).
+                1. The Accessibility Node tree representing interactive UI components with their bounds (x,y coordinates in physical screen pixels).
                 2. Real-time visual screenshot (if provided) when standard DOM elements are not visible.
 
                 CRITICAL RULES:
                 - Review the screen state carefully.
                 - Call ONE tool function at a time to advance towards the goal.
                 - Prefer clickElementByText if the target text is clearly visible in the node tree.
-                - Use clickAtCoordinates(x, y) if coordinates are clear or from visual screenshot.
+                - When tapping using clickAtCoordinates(x, y), always provide coordinates in the device's physical screen pixel space [0..$screenWidth, 0..$screenHeight]. Do NOT use normalized 0-1000 coordinates.
+                - To launch an application, use openApp. You can pass either the package name (e.g. 'com.google.android.youtube') or the common app name (e.g. 'Clock', 'YouTube', 'Settings').
+                - If you are unsure of an app's package name or want to discover what apps are installed, call searchApps(query) to find matching installed apps and their package names.
                 - If an action involves sensitive financial, payment, account deletion, or high-risk actions, YOU MUST CALL requestUserConfirmation first!
                 - When the user goal is completely fulfilled, call agentFinished(summaryMessage).
                 - Keep your reasoning concise and state your next thought.
@@ -151,12 +157,16 @@ class OpenRouterRepository {
 
             val contextText = buildString {
                 appendLine("User Goal: $userGoal")
+                appendLine("Device Display Resolution: ${screenWidth}x${screenHeight} pixels")
                 if (actionHistory.isNotEmpty()) {
                     appendLine("\nActions Executed So Far:")
                     actionHistory.takeLast(6).forEach { appendLine("- $it") }
                 }
                 appendLine("\nCurrent Screen Hierarchy:")
                 appendLine(screenHierarchyText.take(12000))
+                if (screenBitmap != null) {
+                    appendLine("\nVisual screenshot attached (${screenBitmap.width}x${screenBitmap.height}px, scaled from device resolution ${screenWidth}x${screenHeight}px). If tapping based on visual screenshot, map coordinates to the full ${screenWidth}x${screenHeight} space.")
+                }
                 appendLine("\nWhat is the next step to execute? Explain your thought and invoke the corresponding tool.")
             }
 
@@ -250,7 +260,8 @@ class OpenRouterRepository {
                 val args = try { JSONObject(argsString) } catch (e: Exception) { JSONObject() }
 
                 action = when (name) {
-                    "openApp" -> AgentAction.OpenApp(args.optString("packageName"))
+                    "openApp" -> AgentAction.OpenApp(args.optString("packageName", args.optString("appNameOrPackage", "")))
+                    "searchApps" -> AgentAction.SearchApps(args.optString("query"))
                     "clickElementByText" -> AgentAction.ClickElementByText(args.optString("text"))
                     "clickAtCoordinates" -> AgentAction.ClickAtCoordinates(
                         args.optInt("x", 0), args.optInt("y", 0)
@@ -312,12 +323,14 @@ class OpenRouterRepository {
         fun intProp(desc: String) = JSONObject().apply { put("type", "integer"); put("description", desc) }
 
         tools.apply {
-            put(tool("openApp", "Opens an application by its Android package name.",
-                params("packageName" to strProp("e.g. com.google.android.youtube"), required = listOf("packageName"))))
+            put(tool("openApp", "Opens an application by its package name (e.g. 'com.google.android.youtube') or common name (e.g. 'YouTube', 'Clock', 'Settings'). If not exact, the system automatically resolves the closest installed app.",
+                params("packageName" to strProp("e.g. com.google.android.deskclock or Clock"), required = listOf("packageName"))))
+            put(tool("searchApps", "Searches installed apps on the device by keyword or name (e.g. 'clock', 'settings', 'camera', 'notes') to discover their exact package names.",
+                params("query" to strProp("App name or keyword to search, e.g. 'clock' or 'notes'"), required = listOf("query"))))
             put(tool("clickElementByText", "Clicks a UI component matching the provided visible text or description.",
                 params("text" to strProp("The visible label or content description of the target."), required = listOf("text"))))
-            put(tool("clickAtCoordinates", "Simulates a touch tap gesture at specific screen (X, Y) pixel coordinates.",
-                params("x" to intProp("X pixel coordinate"), "y" to intProp("Y pixel coordinate"), required = listOf("x", "y"))))
+            put(tool("clickAtCoordinates", "Simulates a touch tap gesture at specific screen (X, Y) physical pixel coordinates.",
+                params("x" to intProp("X coordinate in physical device screen pixels"), "y" to intProp("Y coordinate in physical device screen pixels"), required = listOf("x", "y"))))
             put(tool("typeTextIntoField", "Types text into a focused or identified input edit field.",
                 params("elementId" to strProp("ID or label of the input field"), "text" to strProp("The text to input"), required = listOf("text"))))
             put(tool("scroll", "Performs a scroll or swipe gesture on the screen.",

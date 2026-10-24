@@ -115,6 +115,10 @@ object PrivacyEngine {
             for (i in 0 until node.childCount) {
                 val child = node.getChild(i) ?: continue
                 traverse(child)
+                if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    @Suppress("DEPRECATION")
+                    child.recycle()
+                }
             }
         }
 
@@ -124,13 +128,22 @@ object PrivacyEngine {
 
     /**
      * Masks sensitive areas on screen capture bitmap by painting solid privacy blocks
-     * and a "PRIVACY SHIELD PROTECTED" badge before transmitting to Gemini Vision endpoint.
+     * and a "PRIVACY SHIELD PROTECTED" badge before transmitting to Gemini/OpenRouter vision endpoints.
+     *
+     * [referenceScreenWidth] and [referenceScreenHeight] represent the physical screen dimensions
+     * from which [sensitiveBounds] were extracted. If [original] is scaled (e.g. 0.5x), the bounds
+     * are scaled proportionally so the mask aligns accurately with the targeted UI elements.
      */
     fun maskSensitiveRegions(
         original: Bitmap,
-        sensitiveBounds: List<Rect>
+        sensitiveBounds: List<Rect>,
+        referenceScreenWidth: Int = original.width,
+        referenceScreenHeight: Int = original.height
     ): Bitmap {
         if (sensitiveBounds.isEmpty()) return original
+
+        val scaleX = if (referenceScreenWidth > 0) original.width.toFloat() / referenceScreenWidth else 1f
+        val scaleY = if (referenceScreenHeight > 0) original.height.toFloat() / referenceScreenHeight else 1f
 
         val maskedBitmap = original.copy(Bitmap.Config.ARGB_8888, true)
         val canvas = Canvas(maskedBitmap)
@@ -141,21 +154,31 @@ object PrivacyEngine {
 
         val textPaint = Paint().apply {
             color = Color.CYAN
-            textSize = 24f
+            textSize = (16f * scaleY).coerceAtLeast(12f)
             isAntiAlias = true
             isFakeBoldText = true
         }
 
         for (rect in sensitiveBounds) {
+            val scaledLeft = (rect.left * scaleX).toInt()
+            val scaledTop = (rect.top * scaleY).toInt()
+            val scaledRight = (rect.right * scaleX).toInt()
+            val scaledBottom = (rect.bottom * scaleY).toInt()
+
             // Expand rect slightly for security margin
             val expanded = Rect(
-                (rect.left - 4).coerceAtLeast(0),
-                (rect.top - 4).coerceAtLeast(0),
-                (rect.right + 4).coerceAtMost(canvas.width),
-                (rect.bottom + 4).coerceAtMost(canvas.height)
+                (scaledLeft - 4).coerceIn(0, canvas.width),
+                (scaledTop - 4).coerceIn(0, canvas.height),
+                (scaledRight + 4).coerceIn(0, canvas.width),
+                (scaledBottom + 4).coerceIn(0, canvas.height)
             )
-            canvas.drawRect(expanded, paint)
-            canvas.drawText("🔒 PROTECTED", expanded.left.toFloat() + 8f, expanded.centerY().toFloat() + 8f, textPaint)
+
+            if (expanded.width() > 0 && expanded.height() > 0) {
+                canvas.drawRect(expanded, paint)
+                if (expanded.height() >= 16) {
+                    canvas.drawText("🔒 PROTECTED", (expanded.left + 6).toFloat(), (expanded.centerY() + 5).toFloat(), textPaint)
+                }
+            }
         }
 
         return maskedBitmap

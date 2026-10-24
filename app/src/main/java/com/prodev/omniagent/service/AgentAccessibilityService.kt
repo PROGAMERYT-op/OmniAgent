@@ -16,8 +16,8 @@ import com.prodev.omniagent.engine.SanitizedNode
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
-import kotlin.coroutines.suspendCoroutine
 
 class AgentAccessibilityService : AccessibilityService() {
 
@@ -107,10 +107,10 @@ class AgentAccessibilityService : AccessibilityService() {
     /**
      * Simulates a tap gesture at the specified screen coordinates using dispatchGesture.
      */
-    suspend fun clickCoordinates(x: Float, y: Float): Boolean = suspendCoroutine { cont ->
+    suspend fun clickCoordinates(x: Float, y: Float): Boolean = suspendCancellableCoroutine { cont ->
         if (x < 0 || y < 0) {
-            cont.resume(false)
-            return@suspendCoroutine
+            if (cont.isActive) cont.resume(false)
+            return@suspendCancellableCoroutine
         }
 
         val path = Path().apply {
@@ -121,15 +121,15 @@ class AgentAccessibilityService : AccessibilityService() {
 
         val dispatched = dispatchGesture(gesture, object : GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription?) {
-                cont.resume(true)
+                if (cont.isActive) cont.resume(true)
             }
 
             override fun onCancelled(gestureDescription: GestureDescription?) {
-                cont.resume(false)
+                if (cont.isActive) cont.resume(false)
             }
         }, null)
 
-        if (!dispatched) {
+        if (!dispatched && cont.isActive) {
             cont.resume(false)
         }
     }
@@ -262,7 +262,7 @@ class AgentAccessibilityService : AccessibilityService() {
         endX: Float,
         endY: Float,
         durationMs: Long = 300
-    ): Boolean = suspendCoroutine { cont ->
+    ): Boolean = suspendCancellableCoroutine { cont ->
         val path = Path().apply {
             moveTo(startX, startY)
             lineTo(endX, endY)
@@ -272,15 +272,15 @@ class AgentAccessibilityService : AccessibilityService() {
 
         val dispatched = dispatchGesture(gesture, object : GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription?) {
-                cont.resume(true)
+                if (cont.isActive) cont.resume(true)
             }
 
             override fun onCancelled(gestureDescription: GestureDescription?) {
-                cont.resume(false)
+                if (cont.isActive) cont.resume(false)
             }
         }, null)
 
-        if (!dispatched) cont.resume(false)
+        if (!dispatched && cont.isActive) cont.resume(false)
     }
 
     fun pressBack(): Boolean = performGlobalAction(GLOBAL_ACTION_BACK)

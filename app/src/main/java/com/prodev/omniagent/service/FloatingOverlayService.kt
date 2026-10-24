@@ -266,6 +266,7 @@ class FloatingOverlayService : Service() {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.CENTER
+            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
         }
 
         // 3. HUD Pointer Layout Params
@@ -319,6 +320,13 @@ class FloatingOverlayService : Service() {
             setViewTreeLifecycleOwner(lifecycleOwner)
             setViewTreeSavedStateRegistryOwner(lifecycleOwner)
             setViewTreeViewModelStoreOwner(lifecycleOwner)
+
+            setOnTouchListener { _, event ->
+                if (event.action == MotionEvent.ACTION_OUTSIDE) {
+                    closeChatWindow()
+                    true
+                } else false
+            }
 
             setContent {
                 MyApplicationTheme {
@@ -427,6 +435,19 @@ class FloatingOverlayService : Service() {
                             }
                             startActivity(intent)
                         }
+                    } else {
+                        // Snap bubble to nearest screen edge (left or right)
+                        val screenWidth = resources.displayMetrics.widthPixels
+                        val bubbleWidth = v.width.takeIf { it > 0 } ?: (56 * resources.displayMetrics.density).toInt()
+                        val snapTargetX = if (bubbleLayoutParams.x + bubbleWidth / 2 < screenWidth / 2) {
+                            24
+                        } else {
+                            (screenWidth - bubbleWidth - 24).coerceAtLeast(24)
+                        }
+                        bubbleLayoutParams.x = snapTargetX
+                        try {
+                            windowManager.updateViewLayout(bubbleComposeView, bubbleLayoutParams)
+                        } catch (_: Exception) {}
                     }
                     true
                 }
@@ -604,7 +625,15 @@ fun FloatingChatWindow(
     onClose: () -> Unit
 ) {
     var inputText by remember { mutableStateOf("") }
+    var isCompact by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
+
+    // Auto-expand if approval is required so the user never misses guardrails
+    LaunchedEffect(state) {
+        if (state is AgentExecutionState.AwaitingConfirmation) {
+            isCompact = false
+        }
+    }
 
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) {
@@ -612,68 +641,136 @@ fun FloatingChatWindow(
         }
     }
 
-    Card(
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xF80F172A)),
-        border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFF334155)),
-        elevation = CardDefaults.cardElevation(defaultElevation = 16.dp),
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(12.dp)
-    ) {
-        Column(
+    if (isCompact && state !is AgentExecutionState.AwaitingConfirmation) {
+        // Compact execution capsule: lets user see their phone screen while agent works
+        Card(
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xF00F172A)),
+            border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFF38BDF8)),
+            elevation = CardDefaults.cardElevation(defaultElevation = 16.dp),
             modifier = Modifier
-                .fillMaxSize()
-                .padding(14.dp)
+                .fillMaxWidth()
+                .wrapContentHeight()
+                .padding(8.dp)
         ) {
-            // Header Bar
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(10.dp)
-                            .background(
-                                if (state is AgentExecutionState.Idle) Color(0xFF10B981) else Color(0xFF00E5FF),
-                                CircleShape
-                            )
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "OmniAgent AI",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 15.sp,
-                        color = Color.White
-                    )
-                }
-
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    // Emergency Stop button (Visible if running)
-                    if (state !is AgentExecutionState.Idle) {
-                        Button(
-                            onClick = onEmergencyStop,
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626)),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                            modifier = Modifier.height(28.dp)
-                        ) {
-                            Icon(Icons.Default.Stop, contentDescription = "Stop", tint = Color.White, modifier = Modifier.size(14.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("ABORT", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                        }
-                        Spacer(modifier = Modifier.width(8.dp))
-                    }
-
-                    IconButton(
-                        onClick = onClose,
-                        modifier = Modifier.size(28.dp)
+                CircularProgressIndicator(
+                    strokeWidth = 2.dp,
+                    color = Color(0xFF38BDF8),
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = when (state) {
+                        is AgentExecutionState.ReadingScreen -> "Reading screen (Step ${state.step})..."
+                        is AgentExecutionState.Thinking -> state.thought
+                        is AgentExecutionState.Executing -> "Action: ${state.actionSummary}"
+                        else -> "OmniAgent AI"
+                    },
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                if (state !is AgentExecutionState.Idle) {
+                    Button(
+                        onClick = onEmergencyStop,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626)),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                        modifier = Modifier.height(26.dp)
                     ) {
-                        Icon(Icons.Default.Close, contentDescription = "Close Overlay", tint = Color(0xFF94A3B8), modifier = Modifier.size(20.dp))
+                        Text("ABORT", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color.White)
                     }
+                    Spacer(modifier = Modifier.width(6.dp))
+                }
+                IconButton(
+                    onClick = { isCompact = false },
+                    modifier = Modifier.size(26.dp)
+                ) {
+                    Icon(Icons.Default.ExpandMore, contentDescription = "Expand Chat", tint = Color(0xFF94A3B8), modifier = Modifier.size(20.dp))
                 }
             }
+        }
+    } else {
+        Card(
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xF80F172A)),
+            border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFF334155)),
+            elevation = CardDefaults.cardElevation(defaultElevation = 16.dp),
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(12.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(14.dp)
+            ) {
+                // Header Bar
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(10.dp)
+                                .background(
+                                    if (state is AgentExecutionState.Idle) Color(0xFF10B981) else Color(0xFF00E5FF),
+                                    CircleShape
+                                )
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "OmniAgent AI",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp,
+                            color = Color.White
+                        )
+                    }
+
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        // Emergency Stop button (Visible if running)
+                        if (state !is AgentExecutionState.Idle) {
+                            Button(
+                                onClick = onEmergencyStop,
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626)),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                modifier = Modifier.height(28.dp)
+                            ) {
+                                Icon(Icons.Default.Stop, contentDescription = "Stop", tint = Color.White, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("ABORT", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                            }
+                            Spacer(modifier = Modifier.width(6.dp))
+                        }
+
+                        // Minimize to compact capsule button
+                        IconButton(
+                            onClick = { isCompact = true },
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(Icons.Default.ExpandLess, contentDescription = "Minimize", tint = Color(0xFF94A3B8), modifier = Modifier.size(20.dp))
+                        }
+
+                        Spacer(modifier = Modifier.width(4.dp))
+
+                        IconButton(
+                            onClick = onClose,
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(Icons.Default.Close, contentDescription = "Close Overlay", tint = Color(0xFF94A3B8), modifier = Modifier.size(20.dp))
+                        }
+                    }
+                }
 
             // Real-Time Thought Stream Bar
             if (state !is AgentExecutionState.Idle) {
@@ -849,6 +946,7 @@ fun FloatingChatWindow(
                         if (inputText.isNotBlank()) {
                             onSendMessage(inputText)
                             inputText = ""
+                            isCompact = true
                         }
                     },
                     enabled = inputText.isNotBlank() && state is AgentExecutionState.Idle,
@@ -869,6 +967,7 @@ fun FloatingChatWindow(
             }
         }
     }
+}
 }
 
 @Composable

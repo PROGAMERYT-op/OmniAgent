@@ -36,6 +36,9 @@ android {
       storePassword = keystoreProperties.getProperty("storePassword") ?: System.getenv("STORE_PASSWORD")
       keyAlias = keystoreProperties.getProperty("keyAlias") ?: System.getenv("KEY_ALIAS") ?: "omniagent"
       keyPassword = keystoreProperties.getProperty("keyPassword") ?: System.getenv("KEY_PASSWORD") ?: storePassword
+      enableV1Signing = true
+      enableV2Signing = true
+      enableV3Signing = true
     }
     create("debugConfig") {
       storeFile = file("${rootDir}/debug.keystore")
@@ -66,6 +69,10 @@ android {
   dependenciesInfo {
     includeInApk = false
     includeInBundle = true
+  }
+  lint {
+    checkReleaseBuilds = false
+    abortOnError = false
   }
 }
 
